@@ -2,13 +2,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <mpi.h>
 
 #define R2(x,y) ((x) * (x) + (y) * (y))
 
 #define hx(i)  (XNodes[i + 1] - XNodes[i])
 #define hy(j)  (YNodes[j + 1] - YNodes[j])
 
-const int NX = 7, NY= 7;
+const int NX = 4, NY= 4;
 const double q = 1.5;
 int PX, PY; // amount of processors on each dimension
 double *XNodes, *YNodes; // lists for x and y coordinates in mesh nodes
@@ -17,7 +18,8 @@ double *r; // residual matrice
 double *l_r, *l_g; // laplace operator of residual matrice
 double *g; // additional matrice
 double *err; // error vect
-
+int size, rank; // processor sizeand processor rank
+    
 const double A1 = 0.0, A2 = 1.0, B1 = 0.0, B2 = 1.0;
 const double eps = 1e-4;
 //==============================Utility functions===============================
@@ -160,11 +162,11 @@ void initP() // initialization of p
     }     
 }
 
-void printM(double * p)
+void printM(double * p, int startx, int finishx, int starty, int finishy) // print matrice
 {
-    for (int j = 0; j <= NY; j++)
+    for (int j = starty - 1; j <= finishy + 1; j++)
     {
-        for (int i = 0; i <= NX; i++)
+        for (int i = startx - 1; i <= finishx + 1; i++)
         {
             printf("%f ", p[j * (NX + 1) + i]);
         }
@@ -173,13 +175,26 @@ void printM(double * p)
     printf("\n");
 }
 //==============================================================================
+//============================MPI send-receive all==============================
+void sendAll(double *matrice, int startx, int finishx, int starty, int finishy)
+{
+    
+}
 
+void receiveAll(double *matrice, int startx, int finishx, int starty, int finishy)
+{
+    
+}
+//==============================================================================
 int main(int argc, char *argv[])
 {
-    int procNum = 1;
-    int rank;
+    //int procNum = 1;
     
-    if (procGrid(procNum) != -1)
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    
+    if (procGrid(size) != -1)
         printf("%d %d\n", PX, PY);
     
     XNodes = (double *)malloc((NX + 1) * sizeof(double));
@@ -188,19 +203,25 @@ int main(int argc, char *argv[])
     genMesh(NX, NY);
     // solution we want to compute 
     p = (double *)malloc((NX + 1) * (NY + 1) * sizeof(double));
-    pnew = (double *)malloc((NX + 1) * (NY + 1) * sizeof(double));
     memset(p, 0, (NX + 1) * (NY + 1) * sizeof(double));
     initP();
     
     // residual matrice
     r = (double *)malloc((NX + 1) * (NY + 1) * sizeof(double));
+    // laplace of residual matrice
     l_r = (double *)malloc((NX + 1) * (NY + 1) * sizeof(double));
     // additional matrice
     g = (double *)malloc((NX + 1) * (NY + 1) * sizeof(double));
+    // laplace of additional matrice
     l_g = (double *)malloc((NX + 1) * (NY + 1) * sizeof(double));
+    // error matrice
     err = (double *)malloc((NX + 1) * (NY + 1) * sizeof(double));
+    
     memset(r, 0, (NX + 1) * (NY + 1) * sizeof(double));
     int startx, starty, finishx, finishy;
+    
+    procArea(rank, &startx, &finishx, &starty, &finishy);
+    //printf("%d: %d %d %d %d\n", rank, startx, finishx, starty, finishy);
     
     int iteration = 0;
     while (true) // main iteration loop
@@ -209,37 +230,43 @@ int main(int argc, char *argv[])
         double alpha = 0, part_alpha = 0;
         double sumErr = 0;
         
-        // for each processor
-        rank = 0;
-        procArea(rank, &startx, &finishx, &starty, &finishy);
-        //printf("%d: %d %d %d %d\n", rank, startx, finishx, starty, finishy);
+        sendAll(p, startx, finishx, starty, finishy);
+        receiveAll(p, startx, finishx, starty, finishy);
+        MPI_Barrier(MPI_COMM_WORLD);
+    
+        // computing residual matrice and g if iteration is zero
+        for (int j = starty; j <= finishy; j++)
+        {
+            for (int i = startx; i <= finishx; i++)
+            {
+                r[(NX + 1) * j + i] = Laplace(p, i, j) - F(XNodes[i], YNodes[j]);
+                if (iteration == 0)
+                    g[(NX + 1) * j + i] = r[(NX + 1) * j + i];
+            }
+        }
+
+        sendAll(r, startx, finishx, starty, finishy);
+        receiveAll(r, startx, finishx, starty, finishy);
+        MPI_Barrier(MPI_COMM_WORLD);
+    
+        // count laplacian of r
+        for (int j = starty; j <= finishy; j++)
+        {
+            for (int i = startx; i <= finishx; i++)
+            {
+                l_r[(NX + 1) * j + i] = Laplace(r, i, j);
+                if (iteration == 0)
+                    l_g[(NX + 1) * j + i] = l_r[(NX + 1) * j + i];
+            }
+        }
         
         if (iteration == 0)
         {
-            // computing r. r on iteration zero can be counted without sending information about p between processes
-            // on iteration zero g is equal to r
-            for (int j = starty; j <= finishy; j++)
-            {
-                for (int i = startx; i <= finishx; i++)
-                {
-                    r[(NX + 1) * j + i] = Laplace(p, i, j) - F(XNodes[i], YNodes[j]);
-                    g[(NX + 1) * j + i] = r[(NX + 1) * j + i];
-                }
-            }
-                
-            // count laplacian of r
-            for (int j = starty; j <= finishy; j++)
-            {
-                for (int i = startx; i <= finishx; i++)
-                {
-                    l_r[(NX + 1) * j + i] = Laplace(r, i, j);
-                }
-            }
             part_tau = scalarProduct(r, r, startx, finishx, starty, finishy) / scalarProduct(l_r, r, startx, finishx, starty, finishy);
-            tau += part_tau;
-            // TODO broadcast tau
+            MPI_Reduce(&part_tau, &tau, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD); // gather part_tau
+            MPI_Bcast(&tau, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD); // broadcast tau
             // count p(k + 1)
-//            printM(p);
+            printM(p, startx, finishx, starty, finishy);
             for (int j = starty; j <= finishy; j++)
             {
                 for (int i = startx; i <= finishx; i++)
@@ -249,43 +276,15 @@ int main(int argc, char *argv[])
                     p[(NX + 1) * j + i] = temp;
                 }
             }
-//            printM(r);
-//            printM(p);
+//            printM(r, startx, finishx, starty, finishy);
+//            printM(p, startx, finishx, starty, finishy);
 //            printf("%f\n", tau);
         } else
-        {
-            // count r(k)
-            for (int j = starty; j <= finishy; j++)
-            {
-                for (int i = startx; i <= finishx; i++)
-                {
-                    r[(NX + 1) * j + i] = Laplace(p, i, j) - F(XNodes[i], YNodes[j]);
-                }
-            }
-          
-            // count laplacian of r
-            for (int j = starty; j <= finishy; j++)
-            {
-                for (int i = startx; i <= finishx; i++)
-                {
-                    l_r[(NX + 1) * j + i] = Laplace(r, i, j);
-                }
-            }
-                
-            // count laplacian of g
-            for (int j = starty; j <= finishy; j++)
-            {
-                for (int i = startx; i <= finishx; i++)
-                {
-                    l_g[(NX + 1) * j + i] = Laplace(g, i, j);
-                }
-            }
-                
+        {        
             // count alpha
             part_alpha = scalarProduct(l_r, g, startx, finishx, starty, finishy) / scalarProduct(l_g, g, startx, finishx, starty, finishy);
-            // TODO gather part_alpha
-            alpha += part_alpha;
-            // TODO broadcast alpha
+            MPI_Reduce(&part_alpha, &alpha, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD); // gather part_alpha
+            MPI_Bcast(&alpha, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD); // broadcast alpha
             
             // count g
             for (int j = starty; j <= finishy; j++)
@@ -296,6 +295,10 @@ int main(int argc, char *argv[])
                 }
             }
                 
+            sendAll(g, startx, finishx, starty, finishy);
+            receiveAll(g, startx, finishx, starty, finishy);
+            MPI_Barrier(MPI_COMM_WORLD);
+    
             // count laplacian of g
             for (int j = starty; j <= finishy; j++)
             {
@@ -306,11 +309,10 @@ int main(int argc, char *argv[])
             }
                 
             part_tau = scalarProduct(r, g, startx, finishx, starty, finishy) / scalarProduct(l_g, g, startx, finishx, starty, finishy);
-            // TODO gather part_tau
-            tau += part_tau;
-            // TODO broadcast tau
+            MPI_Reduce(&part_tau, &tau, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD); // gather part_tau
+            MPI_Bcast(&tau, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD); // broadcast tau
             // count p(k + 1)
-//            printM(p);
+//            printM(p, startx, finishx, starty, finishy);
             for (int j = starty; j <= finishy; j++)
             {
                 for (int i = startx; i <= finishx; i++)
@@ -320,22 +322,38 @@ int main(int argc, char *argv[])
                     p[(NX + 1) * j + i] = temp;
                 }
             }
-//            printM(r);
-//            printM(p);
-//            printM(g);
+//            printM(r, startx, finishx, starty, finishy);
+//            printM(p, startx, finishx, starty, finishy);
+//            printM(g, startx, finishx, starty, finishy);
 //            printf("%f\n", tau);
 //            printf("%f\n", alpha);
         }
         
         iteration++;
         // reduce sumErr
-        sumErr += scalarProduct(err, err, startx, finishx, starty, finishy);
-        
-        printf("%f\n", sumErr);
+        double part_err = scalarProduct(err, err, startx, finishx, starty, finishy);
+        MPI_Reduce(&part_err, &sumErr, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+        //sumErr += part_err 
+        // broadcast sumErr
+        MPI_Bcast(&sumErr, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
+        if (rank == 0)
+            printf("%f\n", sumErr);
         //if (sumErr <= eps * eps)
         //    break;
-        if (iteration > 10)
+        if (iteration > 1)
             break;
     }
+    free(XNodes);
+    free(YNodes);
+    free(p);
+    free(r);
+    free(l_r);
+    free(g);
+    free(l_g);
+    free(err);
+    
+    MPI_Finalize();
+    
     return 0;
 }
