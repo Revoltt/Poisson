@@ -9,7 +9,7 @@
 #define hx(i)  (XNodes[i + 1] - XNodes[i])
 #define hy(j)  (YNodes[j + 1] - YNodes[j])
 
-const int NX = 4, NY= 4;
+int NX = 7, NY= 7;
 const double q = 1.5;
 int PX, PY; // amount of processors on each dimension
 double *XNodes, *YNodes; // lists for x and y coordinates in mesh nodes
@@ -99,27 +99,29 @@ int procGrid(int procNum)
 int procArea(int num, int *startx, int *finishx, int *starty, int *finishy) 
 // counts rectangle in which processor num is responsible for computations
 {
-    int kx = NX % PX;
-    *startx = (NX - 1) / PX * (num % PX) + 1;    
-    *finishx = (NX - 1) / PX * (num % PX + 1);
-    if (num % PX > PX - kx)
+    int rx = (NX - 1) % PX; // amount of processors with higher amount of points
+    int kx = (NX - 1) / PX; // minimal amount of points for processor
+    if (num % PX < rx) // processor will have more points 
     {
-        //printf("%d\n", num - PX + kx);
-        
-        *startx += num % PX - PX + kx - 1;
-        *finishx += num % PX - PX + kx;
+        kx += 1;
+        *startx = num % PX * kx + 1;
+    } else
+    {
+        *startx = (NX - 1) - kx * (PX - num % PX) + 1;
     }
+    *finishx = *startx + kx - 1;    
     
-    int ky = NY % PY;
-    *starty = (NY - 1) / PY * (num / PY) + 1;    
-    *finishy = (NY - 1) / PY * (num / PY + 1);
-    if (num / PY > PY - ky)
+    int ry = (NY - 1) % PY; // amount of processors with higher amount of points
+    int ky = (NY - 1) / PY; // minimal amount of points for processor
+    if (num / PX < ry) // processor will have more points 
     {
-        //printf("%d\n", num - PY + ky);
-        
-        *starty += num / PY - PY + ky - 1;
-        *finishy += num / PY - PY + ky;
+        ky += 1;
+        *starty = num / PX * ky + 1;
+    } else
+    {
+        *starty = (NY - 1) - ky * (PY - num / PX) + 1;
     }
+    *finishy = *starty + ky - 1;    
     
     return 0;
 }
@@ -176,14 +178,122 @@ void printM(double * p, int startx, int finishx, int starty, int finishy) // pri
 }
 //==============================================================================
 //============================MPI send-receive all==============================
-void sendAll(double *matrice, int startx, int finishx, int starty, int finishy)
+MPI_Request *reqs;
+MPI_Request *reqr;
+
+void sendAll(double *matrice, int xstart, int xfinish, int ystart, int yfinish)
 {
+    reqs = (MPI_Request *)malloc(4 * sizeof(MPI_Request));
+
+    double *left = (double *)malloc((yfinish - ystart + 1) * sizeof(double));
+    double *right = (double *)malloc((yfinish - ystart + 1) * sizeof(double));
+    double *top = (double *)malloc((xfinish - xstart + 1) * sizeof(double));
+    double *bottom = (double *)malloc((xfinish - xstart + 1) * sizeof(double));
+
+    //printM(matrice, xstart, xfinish, ystart, yfinish);
+    if (rank % PX != 0) // left
+    {
+        for (int i = ystart; i <= yfinish; i++)
+        {
+            left[i - ystart] = matrice[i * (NX + 1) + xstart];
+        }
+    }
+
+    if (rank % PX != PX - 1) // right
+    {
+        for (int i = ystart; i <= yfinish; i++)
+        {
+             right[i - ystart] = matrice[i * (NX + 1) + xfinish];
+        }
+    }
     
+    if (rank / PX != 0) // top
+    {
+        for (int i = xstart; i <= xfinish; i++)
+        {
+            top[i - xstart] = matrice[ystart * (NX + 1) + i];
+        }
+    }
+    if (rank / PX != PY - 1) // bottom
+    {
+        for (int i = xstart; i <= xfinish; i++)
+        {
+            bottom[i - xstart] = matrice[yfinish * (NX + 1) + i];
+        }
+    }
+
+    if (rank % PX != 0)
+        MPI_Isend(left, yfinish - ystart + 1, MPI_DOUBLE, rank - 1, 0, MPI_COMM_WORLD, &reqs[0]);
+    if (rank % PX != PX - 1)
+        MPI_Isend(right, yfinish - ystart + 1, MPI_DOUBLE, rank + 1, 0, MPI_COMM_WORLD, &reqs[1]);
+    if (rank / PX != 0)
+        MPI_Isend(top, xfinish - xstart + 1, MPI_DOUBLE, rank - PX, 0, MPI_COMM_WORLD, &reqs[2]);
+    if (rank / PX != PY - 1)
+        MPI_Isend(bottom, xfinish - xstart + 1, MPI_DOUBLE, rank + PX, 0, MPI_COMM_WORLD, &reqs[3]);
+    free(reqs);
 }
 
-void receiveAll(double *matrice, int startx, int finishx, int starty, int finishy)
+void receiveAll(double *matrice, int xstart, int xfinish, int ystart, int yfinish)
 {
+    reqr = (MPI_Request *)malloc(4 * sizeof(MPI_Request));
+
+    double *left = (double *)malloc((yfinish - ystart + 1) * sizeof(double));
+    double *right = (double *)malloc((yfinish - ystart + 1) * sizeof(double));
+    double *top = (double *)malloc((xfinish - xstart + 1) * sizeof(double));
+    double *bottom = (double *)malloc((xfinish - xstart + 1) * sizeof(double));
     
+    if (rank % PX != 0) 
+    {
+        MPI_Irecv(left, yfinish - ystart + 1, MPI_DOUBLE, rank - 1, 0, MPI_COMM_WORLD, &reqr[0]);
+        MPI_Wait(&reqr[0], MPI_STATUS_IGNORE);
+    }
+    if (rank % PX != PX - 1)
+    {
+        MPI_Irecv(right, yfinish - ystart + 1, MPI_DOUBLE, rank + 1, 0, MPI_COMM_WORLD, &reqr[1]);
+        MPI_Wait(&reqr[1], MPI_STATUS_IGNORE);
+    }
+    if (rank / PX != 0)
+    {
+        MPI_Irecv(top, xfinish - xstart + 1, MPI_DOUBLE, rank - PX, 0, MPI_COMM_WORLD, &reqr[2]);
+        MPI_Wait(&reqr[2], MPI_STATUS_IGNORE);
+    }
+    if (rank / PX != PY - 1)
+    {
+        MPI_Irecv(bottom, xfinish - xstart + 1, MPI_DOUBLE, rank + PX, 0, MPI_COMM_WORLD, &reqr[3]);
+        MPI_Wait(&reqr[3], MPI_STATUS_IGNORE);
+    }
+
+    if (rank % PX != 0) // left
+    {
+        for (int i = ystart; i <= yfinish; i++)
+        {
+            matrice[i * (NX + 1) + xstart - 1] = left[i - ystart];
+        }
+    }
+
+    if (rank % PX != PX - 1) // right
+    {
+        for (int i = ystart; i <= yfinish; i++)
+        {
+             matrice[i * (NX + 1) + xfinish + 1] = right[i - ystart];
+        }
+    }
+    
+    if (rank / PX != 0) // top
+    {
+        for (int i = xstart; i <= xfinish; i++)
+        {
+            matrice[(ystart - 1) * (NX + 1) + i] = top[i - xstart];
+        }
+    }
+    if (rank / PX != PY - 1) // bottom
+    {
+        for (int i = xstart; i <= xfinish; i++)
+        {
+            matrice[(yfinish + 1) * (NX + 1) + i] = bottom[i - xstart];
+        }
+    }
+    free(reqr);
 }
 //==============================================================================
 int main(int argc, char *argv[])
@@ -194,8 +304,11 @@ int main(int argc, char *argv[])
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
     
-    if (procGrid(size) != -1)
-        printf("%d %d\n", PX, PY);
+    NX = atoi(argv[1]);
+    NY = atoi(argv[2]);
+    procGrid(size);
+    //if (procGrid(size) != -1)
+    //    printf("%d %d\n", PX, PY);
     
     XNodes = (double *)malloc((NX + 1) * sizeof(double));
     YNodes = (double *)malloc((NY + 1) * sizeof(double));
@@ -226,13 +339,13 @@ int main(int argc, char *argv[])
     int iteration = 0;
     while (true) // main iteration loop
     {
-        double tau = 0, part_tau = 0;
-        double alpha = 0, part_alpha = 0;
+        double tau = 0, part_tau_top = 0, part_tau_bottom, tau_top, tau_bottom;
+        double alpha = 0, part_alpha_top = 0, part_alpha_bottom, alpha_top, alpha_bottom;
         double sumErr = 0;
         
         sendAll(p, startx, finishx, starty, finishy);
         receiveAll(p, startx, finishx, starty, finishy);
-        MPI_Barrier(MPI_COMM_WORLD);
+        //MPI_Barrier(MPI_COMM_WORLD);
     
         // computing residual matrice and g if iteration is zero
         for (int j = starty; j <= finishy; j++)
@@ -244,10 +357,10 @@ int main(int argc, char *argv[])
                     g[(NX + 1) * j + i] = r[(NX + 1) * j + i];
             }
         }
-
-        sendAll(r, startx, finishx, starty, finishy);
+	sendAll(r, startx, finishx, starty, finishy); 
         receiveAll(r, startx, finishx, starty, finishy);
-        MPI_Barrier(MPI_COMM_WORLD);
+        //printM(r, startx, finishx, starty, finishy);
+        //MPI_Barrier(MPI_COMM_WORLD);
     
         // count laplacian of r
         for (int j = starty; j <= finishy; j++)
@@ -259,14 +372,19 @@ int main(int argc, char *argv[])
                     l_g[(NX + 1) * j + i] = l_r[(NX + 1) * j + i];
             }
         }
+        //printM(l_r, startx, finishx, starty, finishy);
         
         if (iteration == 0)
         {
-            part_tau = scalarProduct(r, r, startx, finishx, starty, finishy) / scalarProduct(l_r, r, startx, finishx, starty, finishy);
-            MPI_Reduce(&part_tau, &tau, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD); // gather part_tau
-            MPI_Bcast(&tau, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD); // broadcast tau
+            part_tau_top = scalarProduct(r, r, startx, finishx, starty, finishy);
+            part_tau_bottom = scalarProduct(l_r, r, startx, finishx, starty, finishy);
+            MPI_Reduce(&part_tau_top, &tau_top, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD); // gather part_tau
+            MPI_Bcast(&tau_top, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD); // broadcast tau
+            MPI_Reduce(&part_tau_bottom, &tau_bottom, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD); // gather part_tau
+            MPI_Bcast(&tau_bottom, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD); // broadcast tau
+            tau = tau_top / tau_bottom;
             // count p(k + 1)
-            printM(p, startx, finishx, starty, finishy);
+            //printM(r, startx, finishx, starty, finishy);
             for (int j = starty; j <= finishy; j++)
             {
                 for (int i = startx; i <= finishx; i++)
@@ -282,10 +400,14 @@ int main(int argc, char *argv[])
         } else
         {        
             // count alpha
-            part_alpha = scalarProduct(l_r, g, startx, finishx, starty, finishy) / scalarProduct(l_g, g, startx, finishx, starty, finishy);
-            MPI_Reduce(&part_alpha, &alpha, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD); // gather part_alpha
-            MPI_Bcast(&alpha, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD); // broadcast alpha
-            
+            part_alpha_top = scalarProduct(l_r, g, startx, finishx, starty, finishy);
+            part_alpha_bottom =  scalarProduct(l_g, g, startx, finishx, starty, finishy);
+            MPI_Reduce(&part_alpha_top, &alpha_top, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD); // gather part_alpha
+            MPI_Bcast(&alpha_top, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD); // broadcast alpha
+            MPI_Reduce(&part_alpha_bottom, &alpha_bottom, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD); // gather part_alpha
+            MPI_Bcast(&alpha_bottom, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD); // broadcast alpha
+            alpha = alpha_top / alpha_bottom;
+
             // count g
             for (int j = starty; j <= finishy; j++)
             {
@@ -297,7 +419,7 @@ int main(int argc, char *argv[])
                 
             sendAll(g, startx, finishx, starty, finishy);
             receiveAll(g, startx, finishx, starty, finishy);
-            MPI_Barrier(MPI_COMM_WORLD);
+            //MPI_Barrier(MPI_COMM_WORLD);
     
             // count laplacian of g
             for (int j = starty; j <= finishy; j++)
@@ -308,11 +430,15 @@ int main(int argc, char *argv[])
                 }
             }
                 
-            part_tau = scalarProduct(r, g, startx, finishx, starty, finishy) / scalarProduct(l_g, g, startx, finishx, starty, finishy);
-            MPI_Reduce(&part_tau, &tau, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD); // gather part_tau
-            MPI_Bcast(&tau, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD); // broadcast tau
+            part_tau_top = scalarProduct(r, g, startx, finishx, starty, finishy);
+            part_tau_bottom = scalarProduct(l_g, g, startx, finishx, starty, finishy);
+            MPI_Reduce(&part_tau_top, &tau_top, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD); // gather part_tau
+            MPI_Bcast(&tau_top, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD); // broadcast tau
+            MPI_Reduce(&part_tau_bottom, &tau_bottom, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD); // gather part_tau
+            MPI_Bcast(&tau_bottom, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD); // broadcast tau
+            tau = tau_top / tau_bottom;
             // count p(k + 1)
-//            printM(p, startx, finishx, starty, finishy);
+            //printM(p, startx, finishx, starty, finishy);
             for (int j = starty; j <= finishy; j++)
             {
                 for (int i = startx; i <= finishx; i++)
@@ -328,21 +454,18 @@ int main(int argc, char *argv[])
 //            printf("%f\n", tau);
 //            printf("%f\n", alpha);
         }
-        
+//        if (iteration == 0) printM(p, startx, finishx, starty, finishy);
         iteration++;
-        // reduce sumErr
-        double part_err = scalarProduct(err, err, startx, finishx, starty, finishy);
-        MPI_Reduce(&part_err, &sumErr, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-        //sumErr += part_err 
-        // broadcast sumErr
+        double part_err = scalarProduct(err, err, startx, finishx, starty, finishy); // reduce sumErr
+        MPI_Reduce(&part_err, &sumErr, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD); // broadcast sumErr
         MPI_Bcast(&sumErr, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
         if (rank == 0)
-            printf("%f\n", sumErr);
-        //if (sumErr <= eps * eps)
-        //    break;
-        if (iteration > 1)
+            printf("%.10f\n", sumErr);
+        if (sumErr <= eps * eps)
             break;
+        //if (iteration > 5)
+        //    break;
     }
     free(XNodes);
     free(YNodes);
