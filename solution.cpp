@@ -184,7 +184,7 @@ void printMtoFile(FILE* fp, double * p, int startx, int finishx, int starty, int
     {
         for (int i = startx; i <= finishx; i++)
         {
-            fprintf(fp, "%.8f ", p[j * (NX + 1) + i]);
+            fprintf(fp, "%.8f %.8f %.8f\n", XNodes[i], YNodes[j], p[j * (NX + 1) + i]);
         }
         fprintf(fp, "\n");
     }
@@ -478,11 +478,11 @@ int main(int argc, char *argv[])
         MPI_Reduce(&part_err, &sumErr, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD); // broadcast sumErr
         MPI_Bcast(&sumErr, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
-        if (rank == 0)
+        if ((rank == 0) && (iteration % 5 == 0))
             printf("%.10f\n", sumErr);
         if (sumErr <= eps * eps)
         {
-            if (NX == 2000)
+            if (NX == 10)
             {
                 char str[127];
                 sprintf(str, "ApproximateSolution%d_%dx%d_%d_%d", size, NX, NY, rank % PX, rank / PX);
@@ -498,11 +498,9 @@ int main(int argc, char *argv[])
                 {
                     for (int j = starty; j <= finishy; j++)
                     {
-                        fprintf(f1, "%.8f ", fi(XNodes[i], YNodes[j]));
-                        fprintf(f2, "%.8f ", fi(XNodes[i], YNodes[j]) - p[j * (NX + 1) + i]);
+                        fprintf(f1, "%.8f %.8f %.8f\n", XNodes[i], YNodes[j], fi(XNodes[i], YNodes[j]));
+                        fprintf(f2, "%.8f %.8f %.8f\n", XNodes[i], YNodes[j], - fi(XNodes[i], YNodes[j]) + p[j * (NX + 1) + i]);
                     }
-                    fprintf(f1, "\n");
-                    fprintf(f2, "\n");
                 }
                 fclose(f1);
                 fclose(f2);
