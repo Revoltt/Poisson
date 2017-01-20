@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 #include <math.h>
 #include <mpi.h>
 
@@ -164,7 +165,7 @@ void initP() // initialization of p
     }     
 }
 
-void printM(double * p, int startx, int finishx, int starty, int finishy) // print matrice
+void printM(double * p, int startx, int finishx, int starty, int finishy) // print matrice and borders near it
 {
     for (int j = starty - 1; j <= finishy + 1; j++)
     {
@@ -175,6 +176,19 @@ void printM(double * p, int startx, int finishx, int starty, int finishy) // pri
         printf("\n");
     }
     printf("\n");
+}
+
+void printMtoFile(FILE* fp, double * p, int startx, int finishx, int starty, int finishy) // print matrice into file
+{
+    for (int j = starty; j <= finishy; j++)
+    {
+        for (int i = startx; i <= finishx; i++)
+        {
+            fprintf(fp, "%.8f ", p[j * (NX + 1) + i]);
+        }
+        fprintf(fp, "\n");
+    }
+    fprintf(fp, "\n");
 }
 //==============================================================================
 //============================MPI send-receive all==============================
@@ -299,6 +313,9 @@ void receiveAll(double *matrice, int xstart, int xfinish, int ystart, int yfinis
 int main(int argc, char *argv[])
 {
     //int procNum = 1;
+    
+    struct timeval start, end;
+    gettimeofday(&start, NULL);
     
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -457,13 +474,41 @@ int main(int argc, char *argv[])
 //        if (iteration == 0) printM(p, startx, finishx, starty, finishy);
         iteration++;
         double part_err = scalarProduct(err, err, startx, finishx, starty, finishy); // reduce sumErr
+        
         MPI_Reduce(&part_err, &sumErr, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD); // broadcast sumErr
         MPI_Bcast(&sumErr, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
         if (rank == 0)
             printf("%.10f\n", sumErr);
         if (sumErr <= eps * eps)
+        {
+            if (NX == 2000)
+            {
+                char str[127];
+                sprintf(str, "ApproximateSolution%d_%dx%d_%d_%d", size, NX, NY, rank % PX, rank / PX);
+                FILE *f = fopen(str,"w");
+                printMtoFile(f, p, startx, finishx, starty, finishy);
+                fclose(f);
+                sprintf(str, "PreciseSolution%d_%dx%d_%d_%d", size, NX, NY, rank % PX, rank / PX);
+                FILE *f1 = fopen(str,"w");
+                sprintf(str, "Difference%d_%dx%d_%d_%d", size, NX, NY, rank % PX, rank / PX);
+                FILE *f2 = fopen(str,"w");
+            
+                for (int i = startx; i <= finishx; i++)
+                {
+                    for (int j = starty; j <= finishy; j++)
+                    {
+                        fprintf(f1, "%.8f ", fi(XNodes[i], YNodes[j]));
+                        fprintf(f2, "%.8f ", fi(XNodes[i], YNodes[j]) - p[j * (NX + 1) + i]);
+                    }
+                    fprintf(f1, "\n");
+                    fprintf(f2, "\n");
+                }
+                fclose(f1);
+                fclose(f2);
+            }
             break;
+        }
         //if (iteration > 5)
         //    break;
     }
@@ -476,7 +521,9 @@ int main(int argc, char *argv[])
     free(l_g);
     free(err);
     
+    gettimeofday(&end, NULL);
+    if (rank == 0)
+        printf("time: %ld(ms)\n", end.tv_sec * 1000 + end.tv_usec / 1000 - start.tv_sec * 1000 - start.tv_usec / 1000);   
     MPI_Finalize();
-    
     return 0;
 }
