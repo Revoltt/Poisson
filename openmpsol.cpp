@@ -27,6 +27,7 @@ const double eps = 1e-4;
 double scalarProduct(double *a, double *b, int startx, int finishx, int starty, int finishy)
 {
     double result = 0.0;
+    #pragma omp parallel for
     for (int j = starty; j <= finishy; j++)
     {
         for (int i = startx; i <= finishx; i++)
@@ -180,6 +181,7 @@ void printM(double * p, int startx, int finishx, int starty, int finishy) // pri
 
 void printMtoFile(FILE* fp, double * p, int startx, int finishx, int starty, int finishy) // print matrice into file
 {
+    #pragma omp parallel for
     for (int j = starty; j <= finishy; j++)
     {
         for (int i = startx; i <= finishx; i++)
@@ -207,6 +209,7 @@ void sendAll(double *matrice, int xstart, int xfinish, int ystart, int yfinish)
     //printM(matrice, xstart, xfinish, ystart, yfinish);
     if (rank % PX != 0) // left
     {
+        #pragma omp parallel for
         for (int i = ystart; i <= yfinish; i++)
         {
             left[i - ystart] = matrice[i * (NX + 1) + xstart];
@@ -215,6 +218,7 @@ void sendAll(double *matrice, int xstart, int xfinish, int ystart, int yfinish)
 
     if (rank % PX != PX - 1) // right
     {
+        #pragma omp parallel for
         for (int i = ystart; i <= yfinish; i++)
         {
              right[i - ystart] = matrice[i * (NX + 1) + xfinish];
@@ -223,6 +227,7 @@ void sendAll(double *matrice, int xstart, int xfinish, int ystart, int yfinish)
     
     if (rank / PX != 0) // top
     {
+        #pragma omp parallel for
         for (int i = xstart; i <= xfinish; i++)
         {
             top[i - xstart] = matrice[ystart * (NX + 1) + i];
@@ -230,6 +235,7 @@ void sendAll(double *matrice, int xstart, int xfinish, int ystart, int yfinish)
     }
     if (rank / PX != PY - 1) // bottom
     {
+        #pragma omp parallel for
         for (int i = xstart; i <= xfinish; i++)
         {
             bottom[i - xstart] = matrice[yfinish * (NX + 1) + i];
@@ -279,6 +285,7 @@ void receiveAll(double *matrice, int xstart, int xfinish, int ystart, int yfinis
 
     if (rank % PX != 0) // left
     {
+        #pragma omp parallel for
         for (int i = ystart; i <= yfinish; i++)
         {
             matrice[i * (NX + 1) + xstart - 1] = left[i - ystart];
@@ -287,6 +294,7 @@ void receiveAll(double *matrice, int xstart, int xfinish, int ystart, int yfinis
 
     if (rank % PX != PX - 1) // right
     {
+        #pragma omp parallel for
         for (int i = ystart; i <= yfinish; i++)
         {
              matrice[i * (NX + 1) + xfinish + 1] = right[i - ystart];
@@ -295,6 +303,7 @@ void receiveAll(double *matrice, int xstart, int xfinish, int ystart, int yfinis
     
     if (rank / PX != 0) // top
     {
+        #pragma omp parallel for
         for (int i = xstart; i <= xfinish; i++)
         {
             matrice[(ystart - 1) * (NX + 1) + i] = top[i - xstart];
@@ -302,6 +311,7 @@ void receiveAll(double *matrice, int xstart, int xfinish, int ystart, int yfinis
     }
     if (rank / PX != PY - 1) // bottom
     {
+        #pragma omp parallel for
         for (int i = xstart; i <= xfinish; i++)
         {
             matrice[(yfinish + 1) * (NX + 1) + i] = bottom[i - xstart];
@@ -365,6 +375,7 @@ int main(int argc, char *argv[])
         //MPI_Barrier(MPI_COMM_WORLD);
     
         // computing residual matrice and g if iteration is zero
+        #pragma omp parallel for
         for (int j = starty; j <= finishy; j++)
         {
             for (int i = startx; i <= finishx; i++)
@@ -374,12 +385,13 @@ int main(int argc, char *argv[])
                     g[(NX + 1) * j + i] = r[(NX + 1) * j + i];
             }
         }
-	sendAll(r, startx, finishx, starty, finishy); 
+        sendAll(r, startx, finishx, starty, finishy); 
         receiveAll(r, startx, finishx, starty, finishy);
         //printM(r, startx, finishx, starty, finishy);
         //MPI_Barrier(MPI_COMM_WORLD);
     
         // count laplacian of r
+        #pragma omp parallel for
         for (int j = starty; j <= finishy; j++)
         {
             for (int i = startx; i <= finishx; i++)
@@ -402,6 +414,7 @@ int main(int argc, char *argv[])
             tau = tau_top / tau_bottom;
             // count p(k + 1)
             //printM(r, startx, finishx, starty, finishy);
+            #pragma omp parallel for
             for (int j = starty; j <= finishy; j++)
             {
                 for (int i = startx; i <= finishx; i++)
@@ -411,6 +424,7 @@ int main(int argc, char *argv[])
                     p[(NX + 1) * j + i] = temp;
                 }
             }
+            
 //            printM(r, startx, finishx, starty, finishy);
 //            printM(p, startx, finishx, starty, finishy);
 //            printf("%f\n", tau);
@@ -426,6 +440,7 @@ int main(int argc, char *argv[])
             alpha = alpha_top / alpha_bottom;
 
             // count g
+            #pragma omp parallel for
             for (int j = starty; j <= finishy; j++)
             {
                 for (int i = startx; i <= finishx; i++)
@@ -439,6 +454,7 @@ int main(int argc, char *argv[])
             //MPI_Barrier(MPI_COMM_WORLD);
     
             // count laplacian of g
+            #pragma omp parallel for
             for (int j = starty; j <= finishy; j++)
             {
                 for (int i = startx; i <= finishx; i++)
@@ -456,6 +472,7 @@ int main(int argc, char *argv[])
             tau = tau_top / tau_bottom;
             // count p(k + 1)
             //printM(p, startx, finishx, starty, finishy);
+            #pragma omp parallel for
             for (int j = starty; j <= finishy; j++)
             {
                 for (int i = startx; i <= finishx; i++)
@@ -482,7 +499,7 @@ int main(int argc, char *argv[])
             printf("%.10f\n", sumErr);
         if (sumErr <= eps * eps)
         {
-            if (true || (NX == 10))
+            if ((NX > 2000))
             {
                 char str[127];
                 sprintf(str, "ApproximateSolution%d_%dx%d_%d_%d", size, NX, NY, rank % PX, rank / PX);
@@ -494,6 +511,7 @@ int main(int argc, char *argv[])
                 sprintf(str, "Difference%d_%dx%d_%d_%d", size, NX, NY, rank % PX, rank / PX);
                 FILE *f2 = fopen(str,"w");
             
+                #pragma omp parallel for
                 for (int i = startx; i <= finishx; i++)
                 {
                     for (int j = starty; j <= finishy; j++)
